@@ -1,7 +1,7 @@
 import type { ProviderId } from "../types";
 import { isWindows } from "./platform";
 
-export const PROVIDER_IDS: ProviderId[] = ["aider", "amazonq", "antigravity", "claude", "cline", "codebuddy", "codex", "continue", "copilot", "crush", "cursor", "cursor-agent", "forgecode", "gemini", "goose", "grok", "kimi", "kiro", "llm", "ompi", "opencode", "openhands", "openinterpreter", "pearai", "pi", "qwen", "trae", "vibe", "zed", "zcode"];
+export const PROVIDER_IDS: ProviderId[] = ["aider", "amazonq", "antigravity", "claude", "cline", "codebuddy", "codex", "continue", "copilot", "crush", "cursor", "cursor-agent", "forgecode", "gemini", "goose", "grok", "kimi", "kiro", "llm", "ompi", "opencode", "openhands", "openinterpreter", "pearai", "pi", "qwen", "trae", "vibe", "zcode", "zed"];
 export const DEFAULT_PROVIDER_ID: ProviderId = "claude";
 
 // WSL provider loaders use UNC-backed paths and are not interchangeable with
@@ -44,9 +44,9 @@ const PROVIDER_TRANSLATIONS: Record<
   pearai: { key: "common.provider.pearai", fallback: "PearAI" },
   pi: { key: "common.provider.pi", fallback: "Pi" },
   qwen: { key: "common.provider.qwen", fallback: "Qwen Code" },
-  zcode: { key: "common.provider.zcode", fallback: "Z Code" },
   trae: { key: "common.provider.trae", fallback: "Trae" },
   vibe: { key: "common.provider.vibe", fallback: "Mistral Vibe" },
+  zcode: { key: "common.provider.zcode", fallback: "Z Code" },
   zed: { key: "common.provider.zed", fallback: "Zed" },
 };
 
@@ -315,9 +315,9 @@ export function getProviderId(provider?: ProviderId | string): ProviderId {
     case "pi":
     case "pearai":
     case "qwen":
-    case "zcode":
     case "trae":
     case "vibe":
+    case "zcode":
     case "zed":
     case "claude":
       return provider;

@@ -33,8 +33,17 @@ const SCHEME: &str = "zcode://";
 const SESSION_SEP: char = '#';
 const SUMMARY_MAX_CHARS: usize = 80;
 
-/// Base dir: `~/.zcode`.
+/// Base dir: `$ZCODE_HOME` (relative values resolve against the cwd) or
+/// `~/.zcode` — the same override convention as `CODEX_HOME`/`GEMINI_HOME`.
 fn runtime_base() -> Option<PathBuf> {
+    if let Ok(env_val) = std::env::var("ZCODE_HOME") {
+        let path = PathBuf::from(&env_val);
+        return Some(if path.is_absolute() {
+            path
+        } else {
+            std::env::current_dir().ok()?.join(path)
+        });
+    }
     Some(crate::utils::home_dir()?.join(".zcode"))
 }
 
@@ -78,25 +87,22 @@ pub fn scan_projects() -> Result<Vec<ClaudeProject>, String> {
     scan_projects_conn(&conn)
 }
 
+/// Projects (one row per session `directory`) with session/message counts.
 fn scan_projects_conn(conn: &Connection) -> Result<Vec<ClaudeProject>, String> {
-    struct Agg {
-        session_count: usize,
-        message_count: usize,
-        last_modified: i64,
-    }
+    // One row per directory already: GROUP BY aggregates the counts and
+    // `WHERE s.m_cnt > 0` keeps only sessions that would appear when loaded.
     let mut stmt = conn
         .prepare(
             "SELECT s.directory, COUNT(*), SUM(m_cnt), MAX(s.time_updated) FROM ( \
                 SELECT s.directory AS directory, s.time_updated AS time_updated, \
                        (SELECT COUNT(*) FROM message m WHERE m.session_id = s.id) AS m_cnt \
                 FROM session s \
-                WHERE s.task_type != 'subagent_child' \
+                WHERE (s.task_type IS NULL OR s.task_type != 'subagent_child') \
                   AND (s.time_archived IS NULL OR s.time_archived = 0) \
              ) s WHERE s.m_cnt > 0 GROUP BY s.directory",
         )
         .map_err(|e| e.to_string())?;
-    let mut by_dir: std::collections::HashMap<String, Agg> = std::collections::HashMap::new();
-    let rows = stmt
+    let mut projects: Vec<ClaudeProject> = stmt
         .query_map([], |row| {
             Ok((
                 row.get::<_, String>(0)?,
@@ -105,25 +111,9 @@ fn scan_projects_conn(conn: &Connection) -> Result<Vec<ClaudeProject>, String> {
                 row.get::<_, Option<i64>>(3)?,
             ))
         })
-        .map_err(|e| e.to_string())?;
-    for row in rows.flatten() {
-        let (dir, sessions, messages, updated) = row;
-        if messages.unwrap_or(0) == 0 {
-            continue;
-        }
-        let entry = by_dir.entry(dir).or_insert(Agg {
-            session_count: 0,
-            message_count: 0,
-            last_modified: 0,
-        });
-        entry.session_count += sessions.max(0) as usize;
-        entry.message_count += messages.unwrap_or(0).max(0) as usize;
-        entry.last_modified = entry.last_modified.max(updated.unwrap_or(0));
-    }
-
-    let mut projects: Vec<ClaudeProject> = by_dir
-        .into_iter()
-        .map(|(dir, agg)| {
+        .map_err(|e| e.to_string())?
+        .flatten()
+        .map(|(dir, sessions, messages, updated)| {
             let name = Path::new(&dir)
                 .file_name()
                 .map(|n| n.to_string_lossy().to_string())
@@ -133,9 +123,9 @@ fn scan_projects_conn(conn: &Connection) -> Result<Vec<ClaudeProject>, String> {
                 name,
                 path: format!("{SCHEME}{dir}"),
                 actual_path: dir,
-                session_count: agg.session_count,
-                message_count: agg.message_count,
-                last_modified: ms_to_iso(agg.last_modified.max(0) as u64),
+                session_count: sessions.max(0) as usize,
+                message_count: messages.unwrap_or(0).max(0) as usize,
+                last_modified: ms_to_iso(updated.unwrap_or(0).max(0) as u64),
                 git_info: None,
                 provider: Some(PROVIDER.to_string()),
                 storage_type: Some("sqlite".to_string()),
@@ -160,6 +150,7 @@ pub fn load_sessions(
     load_sessions_conn(&conn, directory)
 }
 
+/// Sessions of one Z Code project (`directory`), newest first.
 fn load_sessions_conn(conn: &Connection, directory: &str) -> Result<Vec<ClaudeSession>, String> {
     let mut stmt = conn
         .prepare(
@@ -169,7 +160,7 @@ fn load_sessions_conn(conn: &Connection, directory: &str) -> Result<Vec<ClaudeSe
                            AND json_extract(p.data, '$.type') = 'tool') AS has_tool \
              FROM session s \
              WHERE s.directory = ?1 \
-               AND s.task_type != 'subagent_child' \
+               AND (s.task_type IS NULL OR s.task_type != 'subagent_child') \
                AND (s.time_archived IS NULL OR s.time_archived = 0)",
         )
         .map_err(|e| e.to_string())?;
@@ -182,8 +173,8 @@ fn load_sessions_conn(conn: &Connection, directory: &str) -> Result<Vec<ClaudeSe
         .query_map([directory], |row| {
             Ok((
                 row.get::<_, String>(0)?,
-                row.get::<_, String>(1)?,
-                row.get::<_, String>(2)?,
+                row.get::<_, Option<String>>(1)?,
+                row.get::<_, Option<String>>(2)?,
                 row.get::<_, i64>(3)?,
                 row.get::<_, i64>(4)?,
                 row.get::<_, i64>(5)?,
@@ -197,11 +188,11 @@ fn load_sessions_conn(conn: &Connection, directory: &str) -> Result<Vec<ClaudeSe
             |(id, title, title_source, created, updated, msg_cnt, has_tool)| {
                 let created_iso = ms_to_iso(created.max(0) as u64);
                 let updated_iso = ms_to_iso(updated.max(0) as u64);
-                let summary = if title.trim().is_empty() {
-                    None
-                } else {
-                    Some(summarize(&title))
-                };
+                let summary = title
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|t| !t.is_empty())
+                    .map(summarize);
                 ClaudeSession {
                     session_id: format!("{SCHEME}{directory}{SESSION_SEP}{id}"),
                     actual_session_id: id.clone(),
@@ -214,7 +205,7 @@ fn load_sessions_conn(conn: &Connection, directory: &str) -> Result<Vec<ClaudeSe
                     has_tool_use: has_tool != 0,
                     has_errors: false,
                     summary,
-                    is_renamed: title_source == "custom",
+                    is_renamed: title_source.as_deref() == Some("custom"),
                     provider: Some(PROVIDER.to_string()),
                     storage_type: Some("sqlite".to_string()),
                     entrypoint: None,
@@ -235,6 +226,7 @@ pub fn load_messages(session_path: &str) -> Result<Vec<ClaudeMessage>, String> {
     load_messages_conn(&conn, &session_id)
 }
 
+/// Split `zcode://<directory>#<session_id>` into its two parts.
 fn parse_session_path(session_path: &str) -> Result<(String, String), String> {
     let stripped = session_path.strip_prefix(SCHEME).unwrap_or(session_path);
     stripped
@@ -243,6 +235,7 @@ fn parse_session_path(session_path: &str) -> Result<(String, String), String> {
         .ok_or_else(|| format!("Invalid Z Code session path: {session_path}"))
 }
 
+/// Every viewer-visible message of one session, in `sequence` order.
 fn load_messages_conn(conn: &Connection, session_id: &str) -> Result<Vec<ClaudeMessage>, String> {
     let mut stmt = conn
         .prepare(
@@ -413,6 +406,7 @@ fn append_message(
     }
 }
 
+/// Map a Z Code token report to viewer usage (input excludes cache reads).
 fn convert_usage(tokens: &Value) -> TokenUsage {
     let g = |k: &str| {
         tokens
@@ -441,6 +435,7 @@ fn convert_usage(tokens: &Value) -> TokenUsage {
     }
 }
 
+/// Stringify a tool output that Z Code stores as string or object.
 fn stringify_value(v: &Value) -> String {
     match v {
         Value::String(s) => s.clone(),
@@ -448,6 +443,7 @@ fn stringify_value(v: &Value) -> String {
     }
 }
 
+/// Collapse whitespace and clip to the summary length with an ellipsis.
 fn summarize(text: &str) -> String {
     let cleaned = text.split_whitespace().collect::<Vec<_>>().join(" ");
     if cleaned.chars().count() > SUMMARY_MAX_CHARS {
@@ -495,6 +491,7 @@ fn like_prefilter_pattern(query: &str) -> Option<String> {
     })
 }
 
+/// Case-insensitive search over all sessions, `limit`-capped.
 fn search_conn(conn: &Connection, query: &str, limit: usize) -> Result<Vec<ClaudeMessage>, String> {
     let query_lower = query.to_lowercase();
     let mut results = Vec::new();
@@ -505,7 +502,7 @@ fn search_conn(conn: &Connection, query: &str, limit: usize) -> Result<Vec<Claud
     let mut stmt = conn
         .prepare(
             "SELECT id, directory FROM session s \
-             WHERE task_type != 'subagent_child' \
+             WHERE (task_type IS NULL OR task_type != 'subagent_child') \
                AND (time_archived IS NULL OR time_archived = 0) \
                AND (?1 IS NULL OR EXISTS ( \
                     SELECT 1 FROM part p WHERE p.session_id = s.id \
@@ -550,14 +547,14 @@ fn search_conn(conn: &Connection, query: &str, limit: usize) -> Result<Vec<Claud
 mod tests {
     use super::*;
 
-    /// Build an in-memory DB mirroring the Z Code schema subset we read.
-    fn test_db() -> Connection {
-        let conn = Connection::open_in_memory().unwrap();
-        conn.execute_batch(
-            "CREATE TABLE session (
+    /// Schema subset we read. `task_type` is deliberately nullable here even
+    /// though the wild store declares it NOT NULL — the queries guard against
+    /// NULL so a future schema change degrades gracefully instead of hiding
+    /// sessions.
+    const TEST_SCHEMA: &str = "CREATE TABLE session (
                 id text primary key, project_id text not null, directory text not null,
-                title text not null, task_type text not null default 'interactive',
-                title_source text not null default 'first_input',
+                title text not null, task_type text default 'interactive',
+                title_source text default 'first_input',
                 time_created integer not null, time_updated integer not null,
                 time_archived integer
             );
@@ -568,10 +565,43 @@ mod tests {
             CREATE TABLE part (
                 id text primary key, message_id text not null, session_id text not null,
                 time_created integer not null, data text not null, sequence integer
-            );",
-        )
-        .unwrap();
+            );";
+
+    /// Build an in-memory DB mirroring the Z Code schema subset we read.
+    fn test_db() -> Connection {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(TEST_SCHEMA).unwrap();
         conn
+    }
+
+    /// Build a real file-backed store under `<temp>/cli/db/db.sqlite` and
+    /// point `ZCODE_HOME` at `<temp>`, returning the temp dir (keep it alive
+    /// for the duration of the test) and the connection to seed with.
+    fn temp_zcode_home() -> (tempfile::TempDir, Connection, Option<String>) {
+        let temp = tempfile::TempDir::new().unwrap();
+        let db_dir = temp.path().join("cli").join("db");
+        std::fs::create_dir_all(&db_dir).unwrap();
+        let conn = Connection::open(db_dir.join("db.sqlite")).unwrap();
+        conn.execute_batch(TEST_SCHEMA).unwrap();
+        let original = set_zcode_home(temp.path());
+        (temp, conn, original)
+    }
+
+    /// Save/restore pattern from the vibe provider tests: the suite runs with
+    /// `--test-threads=1`, so mutating `ZCODE_HOME` is safe as long as every
+    /// test restores the previous value.
+    fn set_zcode_home(path: &std::path::Path) -> Option<String> {
+        let original = std::env::var("ZCODE_HOME").ok();
+        std::env::set_var("ZCODE_HOME", path);
+        original
+    }
+
+    fn restore_zcode_home(original: Option<String>) {
+        if let Some(value) = original {
+            std::env::set_var("ZCODE_HOME", value);
+        } else {
+            std::env::remove_var("ZCODE_HOME");
+        }
     }
 
     fn insert_session(conn: &Connection, id: &str, dir: &str, title: &str, task_type: &str) {
@@ -795,6 +825,101 @@ mod tests {
         seed(&conn);
         // No content anywhere contains a literal '%'.
         assert!(search_conn(&conn, "%", 10).unwrap().is_empty());
+    }
+
+    #[test]
+    fn public_api_round_trip_via_zcode_home() {
+        let (_temp, conn, original_env) = temp_zcode_home();
+        insert_session(
+            &conn,
+            "sess-1",
+            "/Users/jack/proj",
+            "fix the login bug",
+            "interactive",
+        );
+        insert_message(
+            &conn,
+            "m1",
+            "sess-1",
+            0,
+            r#"{"role":"user","time":{"created":1788599956241}}"#,
+        );
+        insert_part(
+            &conn,
+            "p1",
+            "m1",
+            "sess-1",
+            0,
+            r#"{"type":"text","text":"why does LOGIN fail?"}"#,
+        );
+
+        // detect + base path follow ZCODE_HOME.
+        let info = detect().expect("detect with ZCODE_HOME set");
+        assert!(info.is_available);
+        assert!(get_base_path().expect("base path").ends_with("cli/db"));
+
+        // scan -> load_sessions -> load_messages through the public fns.
+        let projects = scan_projects().unwrap();
+        assert_eq!(projects.len(), 1);
+        assert_eq!(projects[0].actual_path, "/Users/jack/proj");
+        let sessions = load_sessions(&projects[0].path, false).unwrap();
+        assert_eq!(sessions.len(), 1);
+        assert_eq!(sessions[0].actual_session_id, "sess-1");
+        let messages = load_messages(&sessions[0].session_id).unwrap();
+        assert_eq!(messages.len(), 1);
+        assert_eq!(messages[0].role.as_deref(), Some("user"));
+
+        // search hits the file-backed store too.
+        let hits = search("login", 10).unwrap();
+        assert_eq!(hits.len(), 1);
+
+        restore_zcode_home(original_env);
+    }
+
+    #[test]
+    fn public_api_tolerates_missing_store() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let original = set_zcode_home(temp.path()); // exists, but no db.sqlite
+        assert!(scan_projects().unwrap().is_empty());
+        assert!(load_sessions("zcode:///any/dir", false).unwrap().is_empty());
+        assert!(search("anything", 10).unwrap().is_empty());
+        assert!(load_messages("zcode:///any/dir#sess-x").is_err());
+        restore_zcode_home(original);
+    }
+
+    #[test]
+    fn null_task_type_sessions_are_included() {
+        let conn = test_db();
+        insert_session(&conn, "sess-1", "/Users/jack/proj", "t", "interactive");
+        insert_session(&conn, "sess-null", "/Users/jack/proj", "t", "");
+        // NULL task_type via raw SQL (helper always binds a string).
+        conn.execute(
+            "INSERT INTO session (id, project_id, directory, title, task_type, time_created, time_updated)              VALUES ('sess-null2', 'p', '/Users/jack/proj', 't', NULL, 1, 2)",
+            [],
+        )
+        .unwrap();
+        for id in ["sess-1", "sess-null", "sess-null2"] {
+            insert_message(
+                &conn,
+                &format!("m-{id}"),
+                id,
+                0,
+                r#"{"role":"user","time":{"created":1}}"#,
+            );
+            insert_part(
+                &conn,
+                &format!("p-{id}"),
+                &format!("m-{id}"),
+                id,
+                0,
+                r#"{"type":"text","text":"x"}"#,
+            );
+        }
+        // All three count toward the project and all three load.
+        let projects = scan_projects_conn(&conn).unwrap();
+        assert_eq!(projects[0].session_count, 3);
+        let sessions = load_sessions_conn(&conn, "/Users/jack/proj").unwrap();
+        assert_eq!(sessions.len(), 3);
     }
 
     #[test]
