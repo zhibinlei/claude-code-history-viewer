@@ -469,18 +469,51 @@ pub fn search(query: &str, limit: usize) -> Result<Vec<ClaudeMessage>, String> {
         return Ok(vec![]);
     }
     let conn = open_db(&path)?;
+    search_conn(&conn, query, limit)
+}
+
+/// Candidate-session filter pushed into SQL. Only applied when the query is
+/// safe for a `LIKE` prefilter: SQLite's `LIKE` is case-insensitive for ASCII
+/// only, and raw `part.data` is JSON — a query containing `"`/`\`/control
+/// characters can be contiguous in parsed text but escaped in the raw column,
+/// so those queries (and non-ASCII ones) fall back to scanning every session
+/// and letting the Rust matcher decide, which cannot lose results.
+fn like_prefilter_pattern(query: &str) -> Option<String> {
+    let safe =
+        query.is_ascii() && !query.contains(['"', '\\']) && !query.chars().any(char::is_control);
+    safe.then(|| {
+        let escaped: String = query
+            .chars()
+            .map(|c| match c {
+                '\\' => "\\\\".to_string(),
+                '%' => "\\%".to_string(),
+                '_' => "\\_".to_string(),
+                other => other.to_string(),
+            })
+            .collect();
+        format!("%{escaped}%")
+    })
+}
+
+fn search_conn(conn: &Connection, query: &str, limit: usize) -> Result<Vec<ClaudeMessage>, String> {
     let query_lower = query.to_lowercase();
     let mut results = Vec::new();
 
+    // Narrow to candidate sessions before any JSON parsing: one indexed
+    // EXISTS probe per session instead of loading every message and part.
+    let pattern = like_prefilter_pattern(query);
     let mut stmt = conn
         .prepare(
-            "SELECT id, directory FROM session \
+            "SELECT id, directory FROM session s \
              WHERE task_type != 'subagent_child' \
-               AND (time_archived IS NULL OR time_archived = 0)",
+               AND (time_archived IS NULL OR time_archived = 0) \
+               AND (?1 IS NULL OR EXISTS ( \
+                    SELECT 1 FROM part p WHERE p.session_id = s.id \
+                      AND p.data LIKE ?1 ESCAPE '\\'))",
         )
         .map_err(|e| e.to_string())?;
     let sessions = stmt
-        .query_map([], |row| {
+        .query_map(rusqlite::params![pattern], |row| {
             Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
         })
         .map_err(|e| e.to_string())?
@@ -495,7 +528,7 @@ pub fn search(query: &str, limit: usize) -> Result<Vec<ClaudeMessage>, String> {
             .file_name()
             .map(|n| n.to_string_lossy().to_string())
             .unwrap_or_else(|| directory.clone());
-        for mut msg in load_messages_conn(&conn, &session_id)? {
+        for mut msg in load_messages_conn(conn, &session_id)? {
             if results.len() >= limit {
                 break;
             }
@@ -702,6 +735,66 @@ mod tests {
         assert_eq!(rb[0]["tool_use_id"], "call-1");
         assert_eq!(rb[0]["content"], "line1");
         assert_eq!(rb[0]["is_error"], false);
+    }
+
+    #[test]
+    fn search_prefilters_ascii_queries() {
+        let conn = test_db();
+        seed(&conn);
+        // "login" matches the "why does LOGIN fail?" text case-insensitively
+        // via the SQL prefilter plus the Rust matcher.
+        let hits = search_conn(&conn, "login", 10).unwrap();
+        assert!(!hits.is_empty());
+        assert!(hits.iter().all(|m| m.provider.as_deref() == Some("zcode")));
+    }
+
+    #[test]
+    fn search_falls_back_to_full_scan_for_non_ascii() {
+        let conn = test_db();
+        seed(&conn);
+        insert_message(
+            &conn,
+            "m9",
+            "sess-2",
+            0,
+            r#"{"role":"user","time":{"created":1788599956241}}"#,
+        );
+        insert_part(
+            &conn,
+            "p9",
+            "m9",
+            "sess-2",
+            0,
+            r#"{"type":"text","text":"查看登录问题"}"#,
+        );
+        // Non-ASCII bypasses the LIKE prefilter and still matches.
+        let hits = search_conn(&conn, "登录", 10).unwrap();
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].session_id, "sess-2");
+    }
+
+    #[test]
+    fn like_pattern_escapes_metacharacters_and_guards_unsafe_queries() {
+        // LIKE metacharacters are escaped so the prefilter stays literal.
+        assert_eq!(
+            like_prefilter_pattern("a%b_c"),
+            Some("%a\\%b\\_c%".to_string())
+        );
+        // Non-ASCII, quotes, backslashes and control chars cannot be safely
+        // matched against the raw JSON column — those queries bypass the
+        // prefilter entirely.
+        assert_eq!(like_prefilter_pattern("登录"), None);
+        assert_eq!(like_prefilter_pattern("say \"hi\""), None);
+        assert_eq!(like_prefilter_pattern("a\\b"), None);
+        assert_eq!(like_prefilter_pattern("a\nb"), None);
+    }
+
+    #[test]
+    fn search_treats_percent_as_literal() {
+        let conn = test_db();
+        seed(&conn);
+        // No content anywhere contains a literal '%'.
+        assert!(search_conn(&conn, "%", 10).unwrap().is_empty());
     }
 
     #[test]

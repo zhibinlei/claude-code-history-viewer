@@ -2998,6 +2998,21 @@ fn resolve_provider_project_name_from_session(
     provider: StatsProvider,
     session_path: &str,
 ) -> String {
+    // Z Code session pseudo-paths are `<directory>#<session_id>`; strip the
+    // session suffix so the name is the directory's last segment, not
+    // `proj#sess-1`.
+    if provider == StatsProvider::Zcode {
+        let raw = session_path
+            .strip_prefix("zcode://")
+            .unwrap_or(session_path);
+        let dir = raw.rsplit_once('#').map(|(d, _)| d).unwrap_or(raw);
+        return Path::new(dir)
+            .file_name()
+            .and_then(|n| n.to_str())
+            .filter(|n| !n.is_empty())
+            .unwrap_or_else(|| stats_provider_id(provider))
+            .to_string();
+    }
     match provider {
         StatsProvider::ForgeCode => {
             let workspace_id = session_path
@@ -8412,6 +8427,25 @@ mod tests {
         assert_eq!(
             detect_session_provider(&format!("{home}/.claude/projects/-u/s.jsonl")),
             StatsProvider::Claude
+        );
+    }
+
+    #[test]
+    fn zcode_session_project_name_strips_session_suffix() {
+        assert_eq!(
+            resolve_provider_project_name_from_session(
+                StatsProvider::Zcode,
+                "zcode:///home/jack/proj#sess-1"
+            ),
+            "proj"
+        );
+        // No session suffix: behaves like the generic fallback.
+        assert_eq!(
+            resolve_provider_project_name_from_session(
+                StatsProvider::Zcode,
+                "zcode:///home/jack/proj"
+            ),
+            "proj"
         );
     }
 
