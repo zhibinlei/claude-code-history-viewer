@@ -131,6 +131,9 @@ pub(crate) fn is_safe_session_path(path: &std::path::Path) -> Result<(), String>
     if let Some(qwen_base) = crate::providers::qwen::get_base_path() {
         allowed.push(PathBuf::from(qwen_base));
     }
+    if let Some(zcode_base) = crate::providers::zcode::get_base_path() {
+        allowed.push(PathBuf::from(zcode_base));
+    }
     if let Some(zed_base) = crate::providers::zed::get_base_path() {
         allowed.push(PathBuf::from(zed_base));
     }

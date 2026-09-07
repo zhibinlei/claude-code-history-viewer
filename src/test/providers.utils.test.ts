@@ -76,6 +76,7 @@ describe("providers utils", () => {
       "trae",
       "vibe",
       "zed",
+      "zcode",
     ]);
   });
 

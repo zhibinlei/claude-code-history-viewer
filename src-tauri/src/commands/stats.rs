@@ -51,6 +51,7 @@ enum StatsProvider {
     Pi,
     Gemini,
     Cursor,
+    Zcode,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -110,6 +111,7 @@ fn stats_provider_id(provider: StatsProvider) -> &'static str {
         StatsProvider::Pi => "pi",
         StatsProvider::Gemini => "gemini",
         StatsProvider::Cursor => "cursor",
+        StatsProvider::Zcode => "zcode",
     }
 }
 
@@ -345,6 +347,7 @@ fn parse_active_stats_providers(active_providers: Option<Vec<String>>) -> HashSe
             "openinterpreter" => Some(StatsProvider::OpenInterpreter),
             "pearai" => Some(StatsProvider::PearAI),
             "qwen" => Some(StatsProvider::Qwen),
+            "zcode" => Some(StatsProvider::Zcode),
             "trae" => Some(StatsProvider::Trae),
             "vibe" => Some(StatsProvider::Vibe),
             "zed" => Some(StatsProvider::Zed),
@@ -410,6 +413,8 @@ fn detect_project_provider(project_path: &str) -> StatsProvider {
         StatsProvider::Vibe
     } else if project_path.starts_with("zed://") {
         StatsProvider::Zed
+    } else if project_path.starts_with("zcode://") {
+        StatsProvider::Zcode
     } else if project_path.starts_with("codex://") {
         StatsProvider::Codex
     } else if project_path.starts_with("forgecode://") {
@@ -506,6 +511,9 @@ fn detect_session_provider(session_path: &str) -> StatsProvider {
     }
     if path_under_root(session_path, providers::qwen::get_base_path()) {
         return StatsProvider::Qwen;
+    }
+    if path_under_root(session_path, providers::zcode::get_base_path()) {
+        return StatsProvider::Zcode;
     }
     if path_under_root(session_path, providers::vibe::get_base_path()) {
         return StatsProvider::Vibe;
@@ -1502,6 +1510,7 @@ fn scan_stats_projects(
         StatsProvider::OpenInterpreter => providers::openinterpreter::scan_projects(),
         StatsProvider::PearAI => providers::pearai::scan_projects(),
         StatsProvider::Qwen => providers::qwen::scan_projects(),
+        StatsProvider::Zcode => providers::zcode::scan_projects(),
         StatsProvider::Trae => providers::trae::scan_projects(),
         StatsProvider::Vibe => providers::vibe::scan_projects(),
         StatsProvider::Zed => providers::zed::scan_projects(),
@@ -1541,6 +1550,7 @@ fn load_stats_sessions(
         }
         StatsProvider::PearAI => providers::pearai::load_sessions(project_path, false),
         StatsProvider::Qwen => providers::qwen::load_sessions(project_path, false),
+        StatsProvider::Zcode => providers::zcode::load_sessions(project_path, false),
         StatsProvider::Trae => providers::trae::load_sessions(project_path, false),
         StatsProvider::Vibe => providers::vibe::load_sessions(project_path, false),
         StatsProvider::Zed => providers::zed::load_sessions(project_path, false),
@@ -1578,6 +1588,7 @@ fn load_stats_messages(
         StatsProvider::OpenInterpreter => providers::openinterpreter::load_messages(session_path),
         StatsProvider::PearAI => providers::pearai::load_messages(session_path),
         StatsProvider::Qwen => providers::qwen::load_messages(session_path),
+        StatsProvider::Zcode => providers::zcode::load_messages(session_path),
         StatsProvider::Trae => providers::trae::load_messages(session_path),
         StatsProvider::Vibe => providers::vibe::load_messages(session_path),
         StatsProvider::Zed => providers::zed::load_messages(session_path),
@@ -2976,7 +2987,8 @@ fn resolve_provider_project_name(provider: StatsProvider, project_path: &str) ->
         | StatsProvider::CursorAgent
         | StatsProvider::Goose
         | StatsProvider::Kiro
-        | StatsProvider::Llm => fallback_provider_name(provider, project_path),
+        | StatsProvider::Llm
+        | StatsProvider::Zcode => fallback_provider_name(provider, project_path),
     }
 }
 
@@ -3129,7 +3141,8 @@ fn resolve_provider_project_name_from_session(
         | StatsProvider::CursorAgent
         | StatsProvider::Goose
         | StatsProvider::Kiro
-        | StatsProvider::Llm => fallback_provider_name(provider, session_path),
+        | StatsProvider::Llm
+        | StatsProvider::Zcode => fallback_provider_name(provider, session_path),
         StatsProvider::Claude => "unknown".to_string(),
     }
 }
@@ -5111,6 +5124,7 @@ pub async fn get_global_stats_summary(
         StatsProvider::Trae,
         StatsProvider::Vibe,
         StatsProvider::Zed,
+        StatsProvider::Zcode,
     ] {
         if providers_to_include.contains(&provider) {
             let (provider_stats, provider_projects) =

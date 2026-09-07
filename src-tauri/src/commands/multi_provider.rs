@@ -197,6 +197,7 @@ pub async fn scan_all_projects(
         ("kiro", providers::kiro::scan_projects),
         ("llm", providers::llm::scan_projects),
         ("copilot", providers::copilot::scan_projects),
+        ("zcode", providers::zcode::scan_projects),
     ];
 
     // Spawn every enabled scanner up front so they run concurrently on the
@@ -367,6 +368,7 @@ pub async fn load_provider_sessions(
         "continue" => providers::continue_dev::load_sessions(&project_path, exclude),
         "pearai" => providers::pearai::load_sessions(&project_path, exclude),
         "copilot" => providers::copilot::load_sessions(&project_path, exclude),
+        "zcode" => providers::zcode::load_sessions(&project_path, exclude),
         "gemini" => providers::gemini::load_sessions(&project_path, exclude),
         "goose" => providers::goose::load_sessions(&project_path, exclude),
         "grok" => providers::grok::load_sessions(&project_path, exclude),
@@ -480,6 +482,7 @@ fn load_non_claude_messages(
         "continue" => providers::continue_dev::load_messages(session_path),
         "pearai" => providers::pearai::load_messages(session_path),
         "copilot" => providers::copilot::load_messages(session_path),
+        "zcode" => providers::zcode::load_messages(session_path),
         "gemini" => providers::gemini::load_messages(session_path),
         "goose" => providers::goose::load_messages(session_path),
         "grok" => providers::grok::load_messages(session_path),
@@ -875,6 +878,16 @@ pub async fn search_all_providers(
             Ok(results) => all_results.extend(results),
             Err(e) => {
                 log::warn!("oh-my-pi search failed: {e}");
+            }
+        }
+    }
+
+    // Z Code
+    if providers_to_search.iter().any(|p| p == "zcode") {
+        match providers::zcode::search(&query, max_results) {
+            Ok(results) => all_results.extend(results),
+            Err(e) => {
+                log::warn!("Z Code search failed: {e}");
             }
         }
     }

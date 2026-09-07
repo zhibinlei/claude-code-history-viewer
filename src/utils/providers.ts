@@ -1,7 +1,7 @@
 import type { ProviderId } from "../types";
 import { isWindows } from "./platform";
 
-export const PROVIDER_IDS: ProviderId[] = ["aider", "amazonq", "antigravity", "claude", "cline", "codebuddy", "codex", "continue", "copilot", "crush", "cursor", "cursor-agent", "forgecode", "gemini", "goose", "grok", "kimi", "kiro", "llm", "ompi", "opencode", "openhands", "openinterpreter", "pearai", "pi", "qwen", "trae", "vibe", "zed"];
+export const PROVIDER_IDS: ProviderId[] = ["aider", "amazonq", "antigravity", "claude", "cline", "codebuddy", "codex", "continue", "copilot", "crush", "cursor", "cursor-agent", "forgecode", "gemini", "goose", "grok", "kimi", "kiro", "llm", "ompi", "opencode", "openhands", "openinterpreter", "pearai", "pi", "qwen", "trae", "vibe", "zed", "zcode"];
 export const DEFAULT_PROVIDER_ID: ProviderId = "claude";
 
 // WSL provider loaders use UNC-backed paths and are not interchangeable with
@@ -44,6 +44,7 @@ const PROVIDER_TRANSLATIONS: Record<
   pearai: { key: "common.provider.pearai", fallback: "PearAI" },
   pi: { key: "common.provider.pi", fallback: "Pi" },
   qwen: { key: "common.provider.qwen", fallback: "Qwen Code" },
+  zcode: { key: "common.provider.zcode", fallback: "Z Code" },
   trae: { key: "common.provider.trae", fallback: "Trae" },
   vibe: { key: "common.provider.vibe", fallback: "Mistral Vibe" },
   zed: { key: "common.provider.zed", fallback: "Zed" },
@@ -245,6 +246,13 @@ const PROVIDER_SESSION_CAPABILITIES: Record<ProviderId, ProviderSessionCapabilit
     supportsSessionDeletion: false,
     supportsArchiveCreation: false,
   },
+  zcode: {
+    supportsConversationBreakdown: false,
+    supportsNativeRename: false,
+    supportsResumeCommand: false,
+    supportsSessionDeletion: false,
+    supportsArchiveCreation: false,
+  },
   trae: {
     supportsConversationBreakdown: false,
     supportsNativeRename: false,
@@ -307,6 +315,7 @@ export function getProviderId(provider?: ProviderId | string): ProviderId {
     case "pi":
     case "pearai":
     case "qwen":
+    case "zcode":
     case "trae":
     case "vibe":
     case "zed":
@@ -500,6 +509,7 @@ export const PROVIDER_BADGE_STYLES: Record<ProviderId, string> = {
   pearai: "bg-yellow-500/15 text-yellow-700 dark:text-yellow-300",
   pi: "bg-teal-500/15 text-teal-600 dark:text-teal-400",
   qwen: "bg-violet-600/15 text-violet-700 dark:text-violet-300",
+  zcode: "bg-cyan-600/15 text-cyan-700 dark:text-cyan-300",
   trae: "bg-blue-600/15 text-blue-700 dark:text-blue-300",
   vibe: "bg-orange-600/15 text-orange-700 dark:text-orange-300",
   zed: "bg-neutral-500/15 text-neutral-600 dark:text-neutral-400",
