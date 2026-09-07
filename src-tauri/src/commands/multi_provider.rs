@@ -108,6 +108,7 @@ pub async fn scan_all_projects(
             "openhands".to_string(),
             "trae".to_string(),
             "vibe".to_string(),
+            "zcode".to_string(),
         ]
     });
 
@@ -684,6 +685,7 @@ pub async fn search_all_providers(
             "openhands".to_string(),
             "trae".to_string(),
             "vibe".to_string(),
+            "zcode".to_string(),
         ]
     });
     // Native loaders use the full active provider selection. WSL loaders use

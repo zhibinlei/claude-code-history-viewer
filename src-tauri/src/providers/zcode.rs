@@ -92,7 +92,7 @@ fn scan_projects_conn(conn: &Connection) -> Result<Vec<ClaudeProject>, String> {
                 FROM session s \
                 WHERE s.task_type != 'subagent_child' \
                   AND (s.time_archived IS NULL OR s.time_archived = 0) \
-             ) s GROUP BY s.directory",
+             ) s WHERE s.m_cnt > 0 GROUP BY s.directory",
         )
         .map_err(|e| e.to_string())?;
     let mut by_dir: std::collections::HashMap<String, Agg> = std::collections::HashMap::new();
@@ -643,7 +643,9 @@ mod tests {
         let projects = scan_projects_conn(&conn).unwrap();
         assert_eq!(projects.len(), 1);
         assert_eq!(projects[0].actual_path, "/Users/jack/proj");
-        assert_eq!(projects[0].session_count, 2);
+        // sess-2 has no messages and is excluded from the count, matching
+        // what load_sessions filters.
+        assert_eq!(projects[0].session_count, 1);
         assert_eq!(projects[0].provider.as_deref(), Some("zcode"));
     }
 

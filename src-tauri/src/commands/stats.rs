@@ -319,6 +319,7 @@ fn all_stats_providers() -> HashSet<StatsProvider> {
         StatsProvider::Pi,
         StatsProvider::Gemini,
         StatsProvider::Cursor,
+        StatsProvider::Zcode,
     ]
     .into_iter()
     .collect()
@@ -500,6 +501,9 @@ fn detect_session_provider(session_path: &str) -> StatsProvider {
     if session_path.starts_with("zed://") {
         return StatsProvider::Zed;
     }
+    if session_path.starts_with("zcode://") {
+        return StatsProvider::Zcode;
+    }
     if path_under_root(session_path, providers::cursor_agent::get_base_path()) {
         return StatsProvider::CursorAgent;
     }
@@ -511,9 +515,6 @@ fn detect_session_provider(session_path: &str) -> StatsProvider {
     }
     if path_under_root(session_path, providers::qwen::get_base_path()) {
         return StatsProvider::Qwen;
-    }
-    if path_under_root(session_path, providers::zcode::get_base_path()) {
-        return StatsProvider::Zcode;
     }
     if path_under_root(session_path, providers::vibe::get_base_path()) {
         return StatsProvider::Vibe;
@@ -6241,7 +6242,7 @@ mod tests {
         let parsed = parse_active_stats_providers(Some(ids));
 
         assert_eq!(parsed, supported);
-        assert_eq!(supported.len(), 29);
+        assert_eq!(supported.len(), 30);
     }
 
     #[test]
@@ -8401,6 +8402,11 @@ mod tests {
         assert_eq!(
             detect_session_provider(&format!("{home}/.codex/sessions/2026/rollout-x.jsonl")),
             StatsProvider::Codex
+        );
+        // Z Code pseudo-paths route by scheme, not by filesystem location.
+        assert_eq!(
+            detect_session_provider("zcode:///home/jack/proj#sess-1"),
+            StatsProvider::Zcode
         );
         // Claude files still route to Claude.
         assert_eq!(
